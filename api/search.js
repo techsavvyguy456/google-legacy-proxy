@@ -1,5 +1,4 @@
 export default async function handler(req, res) {
-  // Set CORS headers so legacy clients and webviews never get blocked
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -8,60 +7,72 @@ export default async function handler(req, res) {
     'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
   );
 
-  // Handle preflight browser options checks
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
-  // Extract search query from URL parameter (e.g., /api/search?q=minecraft)
   const { q } = req.query;
 
   if (!q) {
-    return res.status(400).json({
-      error: 'Missing query parameter: q',
-      example: '/api/search?q=hello+world'
-    });
-  }
-
-  const apiKey = process.env.GOOGLE_API_KEY;
-  const cx = process.env.GOOGLE_CX;
-
-  if (!apiKey || !cx) {
-    return res.status(500).json({
-      error: 'Server misconfiguration: GOOGLE_API_KEY or GOOGLE_CX environment variables are missing.'
-    });
+    return res.status(400).json({ error: 'Missing query parameter: q' });
   }
 
   try {
-    const googleEndpoint = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${cx}&q=${encodeURIComponent(q)}`;
-    const response = await fetch(googleEndpoint);
-    const data = await response.json();
+    // Fetch DuckDuckGo HTML Lite (no bot-blocking, super fast, no API key needed)
+    const targetUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
+    const response = await fetch(targetUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html'
+      }
+    });
 
-    // Check if Google returned an error (such as quota exceeded or invalid key)
-    if (data.error) {
-      return res.status(data.error.code || 500).json({
-        error: data.error.message,
-        details: data.error.errors
-      });
+    const html = await response.text();
+
+    // Parse links, titles, and snippets with regex (no bulky npm packages required)
+    const results = [];
+    const regex = /<a class="result__url"[^>]*href="([^"]+)"[^>]*>[\s\S]*?<a class="result__snippet[^>]*>([\s\S]*?)<\/a>/g;
+    const titleRegex = /<a class="result__snippet[^>]*>[\s\S]*?<\/a>/;
+
+    // Fast parser for results
+    const blocks = html.split('<div class="result results_links');
+    for (let i = 1; i < blocks.length && results.length < 10; i++) {
+      const block = blocks[i];
+
+      // Extract title and actual link
+      const linkMatch = block.match(/<a class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+      const snippetMatch = block.match(/<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
+
+      if (linkMatch) {
+        let cleanUrl = linkMatch[1];
+        // Decode DDG redirect url if present
+        const uddgMatch = cleanUrl.match(/uddg=([^&]+)/);
+        if (uddgMatch) {
+          cleanUrl = decodeURIComponent(uddgMatch[1]);
+        }
+
+        const cleanTitle = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+        const cleanSnippet = snippetMatch
+          ? snippetMatch[1].replace(/<[^>]+>/g, '').trim()
+          : '';
+
+        results.push({
+          title: cleanTitle,
+          link: cleanUrl,
+          snippet: cleanSnippet
+        });
+      }
     }
-
-    // Format output into a clean, lightweight payload thet legacy Android apps can easily parse
-    const items = (data.items || []).map(item => ({
-      title: item.title,
-      link: item.link,
-      displayLink: item.displayLink,
-      snippet: item.snippet
-    }));
 
     return res.status(200).json({
       query: q,
-      totalResults: data.searchInformation ? data.searchInformation.totalResults : '0',
-      searchTime: data.searchInformation ? data.searchInformation.searchTime : 0,
-      results: items
+      totalResults: results.length,
+      results
     });
   } catch (error) {
     return res.status(500).json({
-      error: 'Proxy request failed to reach Google API',
+      error: 'Proxy search failed',
       message: error.message
     });
   }
