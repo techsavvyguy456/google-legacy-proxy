@@ -1,0 +1,10 @@
+{
+  "name": "google-legacy-proxy",
+  "version": "1.0.0",
+  "description": "Serverless proxy for Google Search on legacy clients",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {}
+}
